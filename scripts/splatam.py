@@ -170,21 +170,26 @@ def initialize_optimizer(params, lrs_dict, tracking):
 def initialize_first_timestep(dataset, num_frames, scene_radius_depth_ratio, 
                               mean_sq_dist_method, densify_dataset=None, gaussian_distribution=None):
     # Get RGB-D Data & Camera Parameters
+    # 从数据集中获取第一帧的RGB-D数据和相机内参矩阵
     color, depth, intrinsics, pose = dataset[0]
 
     # Process RGB-D Data
+    # 调整RGB图像维度顺序并归一化 (将高度、宽度、通道数(H, W, C)转换为通道数、高度、宽度(C, H, W))
     color = color.permute(2, 0, 1) / 255 # (H, W, C) -> (C, H, W)
+    # 调整深度图像维度顺序 (将高度、宽度、通道数(H, W, C)转换为通道数、高度、宽度(C, H, W))
     depth = depth.permute(2, 0, 1) # (H, W, C) -> (C, H, W)
     
     # Process Camera Parameters
-    intrinsics = intrinsics[:3, :3]
-    w2c = torch.linalg.inv(pose)
+    intrinsics = intrinsics[:3, :3] # 处理相机内参矩阵，取前三行三列
+    w2c = torch.linalg.inv(pose) # 计算世界到相机的变换矩阵（逆变换）
 
     # Setup Camera
+    # 设置相机参数，传递图像尺寸和内参矩阵，并将内参和位姿矩阵转为numpy格式
     cam = setup_camera(color.shape[2], color.shape[1], intrinsics.cpu().numpy(), w2c.detach().cpu().numpy())
 
     if densify_dataset is not None:
         # Get Densification RGB-D Data & Camera Parameters
+        # 如果存在用于数据增密的数据集，获取该数据集第一帧的RGB-D数据和内参
         color, depth, densify_intrinsics, _ = densify_dataset[0]
         color = color.permute(2, 0, 1) / 255 # (H, W, C) -> (C, H, W)
         depth = depth.permute(2, 0, 1) # (H, W, C) -> (C, H, W)
@@ -194,18 +199,22 @@ def initialize_first_timestep(dataset, num_frames, scene_radius_depth_ratio,
         densify_intrinsics = intrinsics
 
     # Get Initial Point Cloud (PyTorch CUDA Tensor)
-    mask = (depth > 0) # Mask out invalid depth values
+    # 初始化点云，使用有效深度值掩码
+    mask = (depth > 0) # 生成有效深度值的掩码
     mask = mask.reshape(-1)
+    # 计算点云并获取均方距离
     init_pt_cld, mean3_sq_dist = get_pointcloud(color, depth, densify_intrinsics, w2c, 
                                                 mask=mask, compute_mean_sq_dist=True, 
                                                 mean_sq_dist_method=mean_sq_dist_method)
 
-    # Initialize Parameters
+    # 初始化参数和变量
     params, variables = initialize_params(init_pt_cld, num_frames, mean3_sq_dist, gaussian_distribution)
 
     # Initialize an estimate of scene radius for Gaussian-Splatting Densification
+    # 根据深度最大值和场景半径深度比率初始化场景半径估计
     variables['scene_radius'] = torch.max(depth)/scene_radius_depth_ratio
 
+    # 根据是否有增密数据集返回不同的参数集
     if densify_dataset is not None:
         return params, variables, intrinsics, w2c, cam, densify_intrinsics, densify_cam
     else:
@@ -488,7 +497,7 @@ def rgbd_slam(config: dict):
                                name=config['wandb']['name'],
                                config=config)
 
-    # 获取运行设备，一般是 GPU 或 CPU
+    # 获取运行设备
     device = torch.device(config["primary_device"])
 
     # Load Dataset
@@ -563,7 +572,7 @@ def rgbd_slam(config: dict):
 
     # Init seperate dataloader for densification if required
     # 如果需要使用特定的分辨率进行数据增密（densification），初始化一个独立的数据加载器
-    if seperate_densification_res:
+    if seperate_densification_res: # 默认 False，跳过
         # 使用不同的图像分辨率重新获取数据集，专门用于数据增密处理
         densify_dataset = get_dataset(
             config_dict=gradslam_data_cfg,  # 数据集配置字典
@@ -590,14 +599,14 @@ def rgbd_slam(config: dict):
             )                                                                                                                
     else:
         # Initialize Parameters & Canoncial Camera parameters
-        # 如果不需要使用特定分辨率进行增密，直接初始化参数和规范摄像机参数
+        # 直接初始化参数和规范摄像机参数
         params, variables, intrinsics, first_frame_w2c, cam = initialize_first_timestep(dataset, num_frames, 
                                                                                         config['scene_radius_depth_ratio'],
                                                                                         config['mean_sq_dist_method'],
                                                                                         gaussian_distribution=config['gaussian_distribution'])
     
     # Init seperate dataloader for tracking if required
-    if seperate_tracking_res:
+    if seperate_tracking_res: # 默认 False，跳过
         tracking_dataset = get_dataset(
             config_dict=gradslam_data_cfg,
             basedir=dataset_config["basedir"],
@@ -617,24 +626,24 @@ def rgbd_slam(config: dict):
         tracking_intrinsics = tracking_intrinsics[:3, :3]
         tracking_cam = setup_camera(tracking_color.shape[2], tracking_color.shape[1], 
                                     tracking_intrinsics.cpu().numpy(), first_frame_w2c.detach().cpu().numpy())
-    
+
     # Initialize list to keep track of Keyframes
-    keyframe_list = []
-    keyframe_time_indices = []
+    keyframe_list = [] # 初始化一个列表，用于记录关键帧
+    keyframe_time_indices = [] # # 初始化一个列表，用于记录关键帧对应的时间索引
     
     # Init Variables to keep track of ground truth poses and runtimes
-    gt_w2c_all_frames = []
-    tracking_iter_time_sum = 0
+    gt_w2c_all_frames = [] # 初始化变量，用于记录所有帧的gt真实位姿
+    tracking_iter_time_sum = 0 # 初始化变量，用于统计 Tracking 迭代的总时间和次数
     tracking_iter_time_count = 0
-    mapping_iter_time_sum = 0
+    mapping_iter_time_sum = 0 # 初始化变量，用于统计 Mapping 迭代的总时间和次数
     mapping_iter_time_count = 0
-    tracking_frame_time_sum = 0
+    tracking_frame_time_sum = 0 # 初始化变量，用于统计每帧 Tracking 的总时间和次数
     tracking_frame_time_count = 0
-    mapping_frame_time_sum = 0
+    mapping_frame_time_sum = 0  # 初始化变量，用于统计每帧 Mapping 的总时间和次数
     mapping_frame_time_count = 0
 
     # Load Checkpoint
-    if config['load_checkpoint']:
+    if config['load_checkpoint']: # 默认 False 跳过
         checkpoint_time_idx = config['checkpoint_time_idx']
         print(f"Loading Checkpoint for Frame {checkpoint_time_idx}")
         ckpt_path = os.path.join(config['workdir'], config['run_name'], f"params{checkpoint_time_idx}.npz")
@@ -671,7 +680,7 @@ def rgbd_slam(config: dict):
     else:
         checkpoint_time_idx = 0
     
-    # Iterate over Scan
+    # Iterate over Scan 主循环
     for time_idx in tqdm(range(checkpoint_time_idx, num_frames)):
         # Load RGBD frames incrementally instead of all frames
         color, depth, _, gt_pose = dataset[time_idx]
