@@ -294,32 +294,38 @@ class GradSLAMDataset(torch.utils.data.Dataset):
         raise NotImplementedError
 
     def __getitem__(self, index):
+        # 获取颜色图像和深度图像的路径
         color_path = self.color_paths[index]
         depth_path = self.depth_paths[index]
+        
+        # 读取颜色图像并转换为float类型的numpy数组
         color = np.asarray(imageio.imread(color_path), dtype=float)
-        color = self._preprocess_color(color)
-        if ".png" in depth_path:
+        color = self._preprocess_color(color) # 对颜色图像进行预处理
+        if ".png" in depth_path:    # 如果是PNG格式的深度图像，读取为int64类型的numpy数组
             # depth_data = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED)
             depth = np.asarray(imageio.imread(depth_path), dtype=np.int64)
-        elif ".exr" in depth_path:
+        elif ".exr" in depth_path:  # 如果是EXR格式的深度图像，使用自定义函数读取深度数据
             depth = readEXR_onlydepth(depth_path)
 
+        # 构建相机内参矩阵
         K = as_intrinsics_matrix([self.fx, self.fy, self.cx, self.cy])
         if self.distortion is not None:
             # undistortion is only applied on color image, not depth!
+            # 如果有畸变参数，仅对颜色图像进行去畸变处理，不处理深度图像
             color = cv2.undistort(color, K, self.distortion)
 
-        color = torch.from_numpy(color)
-        K = torch.from_numpy(K)
+        color = torch.from_numpy(color) # 将颜色图像转换为torch张量
+        K = torch.from_numpy(K)         # 将相机内参矩阵转换为torch张量
 
-        depth = self._preprocess_depth(depth)
-        depth = torch.from_numpy(depth)
+        depth = self._preprocess_depth(depth)   # 对深度图像进行预处理
+        depth = torch.from_numpy(depth)         # 将深度图像转换为torch张量
 
+        # 缩放相机内参矩阵，匹配下采样比例
         K = datautils.scale_intrinsics(K, self.height_downsample_ratio, self.width_downsample_ratio)
-        intrinsics = torch.eye(4).to(K)
-        intrinsics[:3, :3] = K
+        intrinsics = torch.eye(4).to(K) # 创建一个4x4的单位矩阵并将其转换为与K相同的设备和数据类型
+        intrinsics[:3, :3] = K          # 将缩放后的相机内参矩阵赋值给单位矩阵的左上角3x3子矩阵
 
-        pose = self.transformed_poses[index]
+        pose = self.transformed_poses[index]    # 获取当前索引对应的变换后的相机位姿
 
         if self.load_embeddings:
             embedding = self.read_embedding_from_file(self.embedding_paths[index])
